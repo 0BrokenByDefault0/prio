@@ -1,0 +1,1010 @@
+<title>Sigil</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=IBM+Plex+Mono:wght@200;300&display=swap">
+<style>
+  :root {
+    --void:   #05060a;
+    --ground: #0a0910;
+    --ink:    #ede9f5;
+    --dim:    rgba(237, 233, 245, 0.34);
+    --faint:  rgba(237, 233, 245, 0.16);
+    --display: "Cormorant Garamond", "Hoefler Text", Georgia, serif;
+    --utility: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  /* Sigil commits to one visual world — a lit instrument in a dark room.
+     There is no light theme; the ground is painted explicitly so the page
+     holds whatever the host renders behind it. */
+  html, body {
+    height: 100%;
+    background: var(--void);
+    color: var(--ink);
+    overflow: hidden;
+  }
+
+  #stage {
+    position: fixed;
+    inset: 0;
+    touch-action: none;
+    cursor: crosshair;
+    background: var(--void);
+  }
+
+  #veil {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(circle at 50% 50%,
+                rgba(0,0,0,0) 26%, rgba(0,0,0,0.55) 72%, rgba(0,0,0,0.86) 100%);
+  }
+
+  #foot {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding-block: 0 max(30px, env(safe-area-inset-bottom));
+    padding-left: 20px;
+    padding-right: 20px;
+    pointer-events: none;
+    text-align: center;
+  }
+
+  #name {
+    font-family: var(--display);
+    font-weight: 300;
+    font-size: clamp(19px, 5.4vw, 30px);
+    letter-spacing: 0.42em;
+    text-indent: 0.42em;
+    text-transform: uppercase;
+    text-wrap: balance;
+    line-height: 1.25;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 900ms ease, transform 900ms ease;
+  }
+  #name.lit { opacity: 0.92; transform: none; }
+
+  #inscription {
+    font-family: var(--utility);
+    font-weight: 200;
+    font-size: 10px;
+    letter-spacing: 0.30em;
+    text-indent: 0.30em;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+    opacity: 0;
+    transition: opacity 900ms ease;
+    white-space: nowrap;
+  }
+  #inscription.lit { opacity: 1; }
+
+  #hint {
+    font-family: var(--utility);
+    font-weight: 200;
+    font-size: 10px;
+    letter-spacing: 0.44em;
+    text-indent: 0.44em;
+    color: var(--faint);
+    transition: opacity 1200ms ease;
+    animation: breathe 5.5s ease-in-out infinite;
+  }
+  #hint.gone { opacity: 0; animation: none; }
+
+  @keyframes breathe {
+    0%, 100% { color: rgba(237,233,245,0.13); }
+    50%      { color: rgba(237,233,245,0.34); }
+  }
+
+  /* The one legend in the app, and it retires the moment it is obeyed. */
+  #legend {
+    position: fixed;
+    top: max(20px, env(safe-area-inset-top));
+    left: 0; right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 22px;
+    flex-wrap: wrap;
+    padding-inline: 20px;
+    font-family: var(--utility);
+    font-weight: 200;
+    font-size: 9px;
+    letter-spacing: 0.26em;
+    text-indent: 0.26em;
+    color: rgba(237, 233, 245, 0.20);
+    pointer-events: none;
+    transition: opacity 1400ms ease;
+  }
+  #legend.gone { opacity: 0; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #hint { animation: none; color: rgba(237,233,245,0.28); }
+    #name, #inscription { transition-duration: 1ms; }
+  }
+</style>
+
+<canvas id="stage"></canvas>
+<div id="veil"></div>
+
+<div id="legend"><span id="legend-text">DRAG&nbsp;·&nbsp;TURN THE FIELD</span></div>
+
+<div id="foot">
+  <div id="name"></div>
+  <div id="inscription"></div>
+  <div id="hint">TOUCH A SIGIL</div>
+</div>
+
+<script>
+"use strict";
+
+/* ────────────────────────────────────────────────────────────────────────────
+   SIGIL
+
+   A player with no library, no list, no album art and no buttons.
+
+   Every track is a seed. The seed grows a sigil — a living glyph — and the same
+   seed grows the music, note for note, as a pure function of the beat index.
+   Nothing here was recorded. Seeking is exact and instant because bar 97 isn't
+   stored anywhere; it is recomputed.
+
+   You turn the field to browse. You touch a glyph to summon it: it doesn't open
+   a screen, it travels to the centre and unfolds into a mandala. Its outer ring
+   is the scrubber. Its core is play/pause. Pull down and it folds back into the
+   field. There are no cuts anywhere in the app — every state is a number
+   travelling toward another number.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* ── Deterministic randomness ─────────────────────────────────────────────── */
+
+function hash32(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+function rng(seed) {
+  let a = (seed >>> 0) || 1;
+  return function () {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const SCALES = {
+  aeolian:    [0, 2, 3, 5, 7, 8, 10],
+  dorian:     [0, 2, 3, 5, 7, 9, 10],
+  lydian:     [0, 2, 4, 6, 7, 9, 11],
+  phrygian:   [0, 1, 3, 5, 7, 8, 10],
+  pentatonic: [0, 3, 5, 7, 10],
+  hirajoshi:  [0, 2, 3, 7, 8],
+};
+const SCALE_NAMES = Object.keys(SCALES);
+
+function semitone(scale, step) {
+  const d = SCALES[scale];
+  const octave = Math.floor(step / d.length);
+  let i = step % d.length;
+  if (i < 0) i += d.length;
+  return d[i] + 12 * octave;
+}
+
+const midiToHz = (n) => 440 * Math.pow(2, (n - 69) / 12);
+
+/* ── The genome ───────────────────────────────────────────────────────────── */
+
+function makeDNA(seed) {
+  const r = rng(seed);
+  const between = (lo, hi) => lo + (hi - lo) * r();
+  const int = (lo, hi) => lo + Math.floor(r() * (hi - lo + 1));
+
+  return {
+    seed,
+    // musical
+    bpm:          Math.round(between(56, 92) / 2) * 2,
+    root:         int(33, 45),
+    scale:        SCALE_NAMES[int(0, SCALE_NAMES.length - 1)],
+    pluckDensity: between(0.18, 0.62),
+    padVoices:    int(3, 6),
+    subWeight:    between(0.35, 1.0),
+    shimmer:      between(0.15, 1.0),
+    space:        between(0.45, 0.95),
+    // visual
+    petals:       int(5, 13),
+    rings:        int(3, 6),
+    hue:          r() * 360,
+    hueSpread:    between(14, 100),
+    twist:        between(-1.4, 1.4),
+    spikiness:    between(0.1, 0.9),
+    orbitRadius:  between(0.22, 1.0),
+    orbitPhase:   r() * Math.PI * 2,
+    orbitSpeed:   between(0.4, 1.0) * (r() < 0.5 ? -1 : 1),
+  };
+}
+
+function hueAt(dna, t)  { return (dna.hue + dna.hueSpread * t + 360) % 360; }
+function tone(dna, t, light, alpha) {
+  return `hsla(${hueAt(dna, t).toFixed(1)}, 62%, ${(light * 100).toFixed(1)}%, ${alpha.toFixed(3)})`;
+}
+
+const NAMES = [
+  "Salt Cathedral", "Nine Hours of Blue", "The Long Room", "Moth Weather",
+  "Glass Orchard", "Slow Lightning", "Harbour of Bells", "A Field That Remembers",
+  "Copper Rain", "Tide Without a Moon", "The Quiet Machine", "Northern Ember",
+  "Paper Lantern Drift", "Hollow Star", "Snowfall in the Archive",
+  "Everything Returns Slowly", "Velvet Antenna", "The Hour of Dust",
+];
+
+const TRACKS = NAMES.map((title, i) => ({ id: i, title, dna: makeDNA(hash32(title)) }));
+
+const TRACK_LENGTH = 360; // six minutes of weather
+
+/* ── Audio ────────────────────────────────────────────────────────────────── */
+
+const STEPS_PER_CHORD = 128; // eight bars
+
+let ac = null, master = null, dryBus = null, wetBus = null, analyser = null, freqData = null;
+
+function reverbImpulse(context, seconds, decay) {
+  const rate = context.sampleRate;
+  const len = Math.floor(rate * seconds);
+  const buf = context.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      const t = i / len;
+      // A touch of early-reflection sparseness keeps it from sounding like a
+      // plate: the first 40ms is thinner than the tail.
+      const sparse = t < 0.11 ? (Math.random() < 0.35 ? 1 : 0.12) : 1;
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay) * sparse;
+    }
+  }
+  return buf;
+}
+
+function initAudio() {
+  if (ac) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  ac = new Ctx();
+
+  master = ac.createGain();
+  master.gain.value = 0.85;
+
+  const convolver = ac.createConvolver();
+  convolver.buffer = reverbImpulse(ac, 5.2, 2.6);
+
+  wetBus = ac.createGain(); wetBus.gain.value = 0.55;
+  dryBus = ac.createGain(); dryBus.gain.value = 0.72;
+
+  // A gentle high shelf off the tail so the reverb sits behind the plucks
+  // instead of in front of them.
+  const tame = ac.createBiquadFilter();
+  tame.type = "lowpass";
+  tame.frequency.value = 3400;
+
+  wetBus.connect(convolver);
+  convolver.connect(tame);
+  tame.connect(master);
+  dryBus.connect(master);
+
+  analyser = ac.createAnalyser();
+  analyser.fftSize = 1024;
+  analyser.smoothingTimeConstant = 0.82;
+  freqData = new Uint8Array(analyser.frequencyBinCount);
+
+  master.connect(analyser);
+  master.connect(ac.destination);
+}
+
+/** One sigil, singing. Owns its own nodes and its own clock. */
+class Voice {
+  constructor(dna) {
+    this.dna = dna;
+    this.stepDur = 60 / dna.bpm / 4;
+    this.out = ac.createGain();
+    this.out.gain.value = 0;
+    this.out.connect(dryBus);
+    this.out.connect(wetBus);
+
+    // Pad: detuned triangles under a slowly breathing lowpass.
+    this.padFilter = ac.createBiquadFilter();
+    this.padFilter.type = "lowpass";
+    this.padFilter.frequency.value = 700;
+    this.padFilter.Q.value = 0.9;
+    this.padFilter.connect(this.out);
+
+    this.lfo = ac.createOscillator();
+    this.lfo.frequency.value = 0.055 + 0.03 * dna.shimmer;
+    this.lfoAmount = ac.createGain();
+    this.lfoAmount.gain.value = 260;
+    this.lfo.connect(this.lfoAmount);
+    this.lfoAmount.connect(this.padFilter.frequency);
+
+    this.pads = [];
+    for (let i = 0; i < dna.padVoices; i++) {
+      const osc = ac.createOscillator();
+      osc.type = i % 3 === 0 ? "sawtooth" : "triangle";
+      const g = ac.createGain();
+      g.gain.value = (i % 3 === 0 ? 0.035 : 0.075) / Math.sqrt(dna.padVoices);
+      const pan = ac.createStereoPanner();
+      pan.pan.value = (i / Math.max(1, dna.padVoices - 1)) * 1.4 - 0.7;
+      osc.connect(g); g.connect(pan); pan.connect(this.padFilter);
+      this.pads.push(osc);
+    }
+
+    // Sub
+    this.sub = ac.createOscillator();
+    this.sub.type = "sine";
+    this.sub.frequency.value = midiToHz(dna.root - 12);
+    this.subGain = ac.createGain();
+    this.subGain.gain.value = 0.16 * dna.subWeight;
+    this.sub.connect(this.subGain);
+    this.subGain.connect(this.out);
+
+    this.nextStep = 0;
+    this.t0 = 0;
+    this.chordIndex = -1;
+    this.releasing = false;
+    this.stopped = false;
+  }
+
+  start(offsetSeconds = 0, fadeIn = 2.6) {
+    const now = ac.currentTime;
+    this.t0 = now - offsetSeconds;
+    this.nextStep = Math.ceil(offsetSeconds / this.stepDur);
+    this.pads.forEach((o) => o.start(now));
+    this.sub.start(now);
+    this.lfo.start(now);
+    this.retune(now, 0);
+    // Equal-power-ish rise: nothing in Sigil ever arrives, it accumulates.
+    this.out.gain.setValueAtTime(0.0001, now);
+    this.out.gain.exponentialRampToValueAtTime(1, now + fadeIn);
+  }
+
+  get position() { return Math.max(0, ac.currentTime - this.t0); }
+
+  seek(seconds) {
+    this.t0 = ac.currentTime - seconds;
+    this.nextStep = Math.ceil(seconds / this.stepDur);
+    this.retune(ac.currentTime, 0.25);
+  }
+
+  shift(delta) { this.t0 += delta; }
+
+  retune(when, glide) {
+    const step = Math.max(0, Math.floor((when - this.t0) / this.stepDur));
+    const index = Math.floor(step / STEPS_PER_CHORD);
+    if (index === this.chordIndex) return;
+    this.chordIndex = index;
+
+    const r = rng(this.dna.seed ^ Math.imul(index + 1, 0x9e3779b9));
+    const base = Math.floor(r() * 7) - 2;
+    const chordTones = [0, 2, 4, 6, 7, 9];
+
+    this.pads.forEach((osc, i) => {
+      const octave = i % 3 === 2 ? 12 : 0;
+      const detune = (i - (this.pads.length - 1) / 2) * 6 * this.dna.shimmer;
+      const note = this.dna.root + 12 + semitone(this.dna.scale, base + chordTones[i % 6]) + octave;
+      osc.detune.setTargetAtTime(detune, when, 0.4);
+      if (glide > 0) osc.frequency.setTargetAtTime(midiToHz(note), when, glide);
+      else osc.frequency.setValueAtTime(midiToHz(note), when);
+    });
+  }
+
+  /** Lookahead scheduler. Notes are a pure function of the step index. */
+  schedule(horizon) {
+    if (this.stopped) return;
+    const limit = ac.currentTime + horizon;
+    let guard = 0;
+    while (this.t0 + this.nextStep * this.stepDur < limit && guard++ < 256) {
+      const step = this.nextStep++;
+      const when = this.t0 + step * this.stepDur;
+      if (step % STEPS_PER_CHORD === 0) this.retune(when, 1.4);
+      this.maybePluck(step, when);
+    }
+  }
+
+  maybePluck(step, when) {
+    const d = this.dna;
+    const r = rng(d.seed ^ Math.imul(step + 1, 0x85ebca6b));
+    const onBeat = step % 4 === 0;
+    if (r() >= d.pluckDensity * (onBeat ? 2.2 : 0.7)) return;
+
+    const cr = rng(d.seed ^ Math.imul(Math.floor(step / STEPS_PER_CHORD) + 1, 0x9e3779b9));
+    const base = Math.floor(cr() * 7) - 2;
+
+    const octave = [12, 24, 24, 36][Math.floor(r() * 4)];
+    const note = d.root + semitone(d.scale, base + Math.floor(r() * 12)) + octave;
+    const level = (0.10 + r() * 0.16) * (onBeat ? 1.2 : 0.8);
+    const decay = 1.4 + r() * 3.2;
+    const hz = midiToHz(note);
+
+    const g = ac.createGain();
+    const pan = ac.createStereoPanner();
+    pan.pan.value = r() * 1.6 - 0.8;
+    g.connect(pan);
+    pan.connect(this.out);
+
+    // Two partials, the upper one a hair sharp — that beat is the shimmer.
+    [1, 2.0104].forEach((mult, i) => {
+      const osc = ac.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = hz * mult;
+      const og = ac.createGain();
+      og.gain.value = i === 0 ? 1 : 0.34;
+      osc.connect(og); og.connect(g);
+      osc.start(when);
+      osc.stop(when + decay + 0.1);
+    });
+
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(level, when + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + decay);
+    setTimeout(() => { try { pan.disconnect(); g.disconnect(); } catch (e) {} },
+               (when - ac.currentTime + decay + 0.4) * 1000);
+  }
+
+  release(seconds = 2.6) {
+    if (this.releasing) return;
+    this.releasing = true;
+    const now = ac.currentTime;
+    this.out.gain.cancelScheduledValues(now);
+    this.out.gain.setValueAtTime(Math.max(0.0001, this.out.gain.value), now);
+    this.out.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
+    const stopAt = now + seconds + 0.2;
+    this.pads.forEach((o) => o.stop(stopAt));
+    this.sub.stop(stopAt);
+    this.lfo.stop(stopAt);
+    setTimeout(() => {
+      this.stopped = true;
+      try { this.out.disconnect(); } catch (e) {}
+    }, (seconds + 0.6) * 1000);
+  }
+}
+
+const audio = {
+  voice: null,
+  retiring: [],
+  playing: false,
+  pausedAt: 0,
+  bands: [0.12, 0.10, 0.04],
+
+  summon(track) {
+    initAudio();
+    if (ac.state === "suspended") ac.resume();
+    if (this.voice) {
+      this.retiring.push(this.voice);
+      this.voice.release(2.6);
+    }
+    this.voice = new Voice(track.dna);
+    this.voice.start(0, this.retiring.length ? 2.6 : 3.4);
+    this.playing = true;
+    master.gain.cancelScheduledValues(ac.currentTime);
+    master.gain.setTargetAtTime(0.85, ac.currentTime, 0.2);
+  },
+
+  toggle() {
+    if (!this.voice || !ac) return;
+    this.playing = !this.playing;
+    master.gain.cancelScheduledValues(ac.currentTime);
+    master.gain.setTargetAtTime(this.playing ? 0.85 : 0.0, ac.currentTime, 0.18);
+    if (this.playing) {
+      this.voice.shift(ac.currentTime - this.pausedAt);
+    } else {
+      this.pausedAt = ac.currentTime;
+    }
+  },
+
+  seekFraction(f) {
+    if (this.voice) this.voice.seek(Math.max(0, Math.min(1, f)) * TRACK_LENGTH);
+  },
+
+  dismiss() {
+    if (this.voice) { this.voice.release(2.0); this.voice = null; }
+    this.playing = false;
+  },
+
+  get position() {
+    if (!this.voice) return 0;
+    return this.playing ? this.voice.position : Math.max(0, this.pausedAt - this.voice.t0);
+  },
+
+  tick() {
+    if (!ac) return;
+    if (this.playing) {
+      if (this.voice) this.voice.schedule(0.18);
+      this.retiring.forEach((v) => v.schedule(0.18));
+    }
+    this.retiring = this.retiring.filter((v) => !v.stopped);
+
+    analyser.getByteFrequencyData(freqData);
+    const band = (from, to) => {
+      let sum = 0;
+      for (let i = from; i < to; i++) sum += freqData[i];
+      return sum / (to - from) / 255;
+    };
+    const target = [band(1, 7), band(7, 44), band(44, 190)];
+    const k = this.playing ? 0.10 : 0.04;
+    for (let i = 0; i < 3; i++) {
+      this.bands[i] += (target[i] * (i === 2 ? 1.5 : 1.15) - this.bands[i]) * k;
+    }
+  },
+};
+
+setInterval(() => audio.tick(), 25);
+
+/* ── World ────────────────────────────────────────────────────────────────── */
+
+const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const world = {
+  rotation: 0,
+  spin: reduced ? 0.008 : 0.035,
+  spinVelocity: 0,
+  bloom: 0,
+  bloomTarget: 0,
+  focus: null,
+  scrubbing: false,
+  scrubFraction: 0,
+  scrubGlow: 0,
+  drift: 0,
+  last: 0,
+};
+
+function stepWorld(now) {
+  const dt = world.last ? Math.min(1 / 20, (now - world.last) / 1000) : 1 / 60;
+  world.last = now;
+  world.rotation += (world.spin + world.spinVelocity) * dt;
+  world.spinVelocity *= Math.pow(0.06, dt);
+  world.bloom += (world.bloomTarget - world.bloom) * (1 - Math.pow(0.0015, dt));
+  world.scrubGlow += ((world.scrubbing ? 1 : 0) - world.scrubGlow) * (1 - Math.pow(0.004, dt));
+  world.drift += dt;
+}
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
+
+let W = 0, H = 0, CX = 0, CY = 0, MAXR = 0, DPR = 1;
+const canvas = document.getElementById("stage");
+const g = canvas.getContext("2d");
+
+function resize() {
+  DPR = Math.min(2.5, window.devicePixelRatio || 1);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  CX = W / 2;
+  CY = H / 2;
+  MAXR = Math.min(W, H) * 0.40;
+}
+window.addEventListener("resize", resize);
+resize();
+
+/** Where a glyph is, right now. One function, shared by drawing and hit-testing. */
+function placement(i) {
+  const track = TRACKS[i];
+  const d = track.dna;
+  const t = world.drift;
+
+  // Three orbits, evenly peopled, each turning at its own rate — so the rings
+  // shear against each other and the field never resolves into a static wheel.
+  const ringIndex = i % 3;
+  const perRing = Math.ceil(TRACKS.length / 3);
+  const withinRing = Math.floor(i / 3);
+
+  const angle = (withinRing / perRing) * Math.PI * 2
+    + ringIndex * 0.7
+    + d.orbitPhase * 0.10
+    + world.rotation * (0.7 + 0.22 * ringIndex)
+    + t * 0.012 * d.orbitSpeed;
+
+  const wobble = 1 + 0.05 * Math.sin(t * 0.23 + d.orbitPhase * 3);
+  let orbit = MAXR * (0.46 + 0.29 * ringIndex) * wobble;
+
+  const isFocus = world.focus === i;
+  const r = isFocus ? orbit * (1 - world.bloom) : orbit * (1 + 0.55 * world.bloom);
+
+  let x = CX + Math.cos(angle) * r;
+  let y = CY + Math.sin(angle) * r * 0.95;
+  if (isFocus) {
+    x += (CX - x) * world.bloom;
+    y += (CY - y) * world.bloom;
+  }
+
+  const baseRadius = MAXR * (0.070 + 0.038 * d.spikiness);
+  const radius = isFocus
+    ? baseRadius + (MAXR * 0.90 - baseRadius) * world.bloom
+    : baseRadius * (1 - 0.45 * world.bloom);
+
+  const presence = isFocus ? 1 : 1 - 0.74 * world.bloom;
+  return { x, y, radius, presence, isFocus };
+}
+
+/* ── Sigil rendering ──────────────────────────────────────────────────────── */
+
+const IDLE_BANDS = [0.16, 0.13, 0.05];
+
+function drawHalo(d, x, y, radius, bands, alpha) {
+  const r = radius * (1.6 + 0.9 * bands[0]);
+  const grad = g.createRadialGradient(x, y, 0, x, y, r);
+  grad.addColorStop(0, tone(d, 0.3, 0.56, 0.30 * alpha));
+  grad.addColorStop(0.45, tone(d, 0.6, 0.44, 0.10 * alpha));
+  grad.addColorStop(1, tone(d, 0.9, 0.4, 0));
+  g.fillStyle = grad;
+  g.fillRect(x - r, y - r, r * 2, r * 2);
+}
+
+function drawSigil(d, x, y, radius, time, bands, bloom, alpha) {
+  const [low, mid, high] = bands;
+  const spin = time * 0.09 * d.orbitSpeed;
+  const breathe = 1 + 0.045 * Math.sin(time * 0.9) + 0.06 * low;
+
+  // Rings — dashes drawn as arcs, each ring turning at its own rate.
+  for (let ring = 0; ring < d.rings; ring++) {
+    const t = d.rings > 1 ? ring / (d.rings - 1) : 0;
+    const rr = radius * (0.34 + 0.62 * t) * breathe;
+    const dir = ring % 2 === 0 ? 1 : -1;
+    const rot = spin * (1 + t * 1.7) * dir + d.twist * t;
+    const segments = 24 + ring * 9;
+    const sweep = (Math.PI * 2 / segments) * (0.34 + 0.4 * mid);
+
+    g.beginPath();
+    for (let s = 0; s < segments; s++) {
+      const a0 = rot + (s / segments) * Math.PI * 2;
+      g.moveTo(x + Math.cos(a0) * rr, y + Math.sin(a0) * rr);
+      g.arc(x, y, rr, a0, a0 + sweep);
+    }
+    g.strokeStyle = tone(d, t, 0.52 + 0.3 * mid, alpha * (0.34 + 0.44 * bloom));
+    g.lineWidth = Math.max(0.5, radius * (0.006 + 0.011 * bloom));
+    g.stroke();
+  }
+
+  // Petals — each on its own slow clock, so the figure never pulses in lockstep.
+  for (let p = 0; p < d.petals; p++) {
+    const t = p / d.petals;
+    const angle = spin * 0.6 + t * Math.PI * 2;
+    const life = 0.55 + 0.45 * Math.sin(time * (0.7 + (p % 5) * 0.13) + p);
+    const reach = radius * (0.5 + 0.5 * d.spikiness) * (0.72 + 0.28 * life) * breathe;
+
+    const tipX = x + Math.cos(angle) * reach;
+    const tipY = y + Math.sin(angle) * reach;
+    const c1x = x + Math.cos(angle + 0.5) * reach * 0.45;
+    const c1y = y + Math.sin(angle + 0.5) * reach * 0.45;
+    const c2x = x + Math.cos(angle - 0.5) * reach * 0.45;
+    const c2y = y + Math.sin(angle - 0.5) * reach * 0.45;
+
+    g.beginPath();
+    g.moveTo(x, y);
+    g.quadraticCurveTo(c1x, c1y, tipX, tipY);
+    g.quadraticCurveTo(c2x, c2y, x, y);
+
+    const light = 0.5 + 0.32 * life;
+    g.fillStyle = tone(d, t, light, alpha * (0.05 + 0.10 * bloom));
+    g.fill();
+    g.strokeStyle = tone(d, t, light + 0.12, alpha * (0.30 + 0.40 * bloom));
+    g.lineWidth = Math.max(0.4, radius * 0.0055);
+    g.stroke();
+
+    const tipR = radius * (0.012 + 0.05 * high * bloom) * (0.6 + 0.8 * life);
+    if (tipR > 0.4) {
+      g.beginPath();
+      g.arc(tipX, tipY, tipR, 0, Math.PI * 2);
+      g.fillStyle = tone(d, t, 0.78, alpha * 0.9);
+      g.fill();
+    }
+  }
+
+  // Core
+  const coreR = radius * (0.10 + 0.06 * low) * breathe;
+  const outer = coreR * (2.6 + 1.6 * bloom);
+  const grad = g.createRadialGradient(x, y, 0, x, y, outer);
+  grad.addColorStop(0, `hsla(${hueAt(d, 0.5).toFixed(1)}, 40%, 96%, ${(alpha * (0.82 + 0.18 * low)).toFixed(3)})`);
+  grad.addColorStop(0.30, tone(d, 0.5, 0.62, alpha * 0.5));
+  grad.addColorStop(1, tone(d, 0.9, 0.5, 0));
+  g.fillStyle = grad;
+  g.beginPath();
+  g.arc(x, y, outer, 0, Math.PI * 2);
+  g.fill();
+}
+
+function drawThread() {
+  if (world.bloom < 0.05 || world.focus === null) return;
+  const from = placement(world.focus);
+  const nextIndex = (world.focus + 1) % TRACKS.length;
+  const to = placement(nextIndex);
+  const t = world.drift;
+
+  const mx = (from.x + to.x) / 2 + Math.sin(t * 0.7) * MAXR * 0.12;
+  const my = (from.y + to.y) / 2 + Math.cos(t * 0.5) * MAXR * 0.12;
+
+  const grad = g.createLinearGradient(from.x, from.y, to.x, to.y);
+  grad.addColorStop(0, tone(TRACKS[world.focus].dna, 0.2, 0.62, 0.5 * world.bloom));
+  grad.addColorStop(1, tone(TRACKS[nextIndex].dna, 0.6, 0.55, 0.06 * world.bloom));
+
+  g.beginPath();
+  g.moveTo(from.x, from.y);
+  g.quadraticCurveTo(mx, my, to.x, to.y);
+  g.strokeStyle = grad;
+  g.lineWidth = 1.2;
+  g.lineCap = "round";
+  g.setLineDash([2, 9]);
+  g.lineDashOffset = -t * 26;
+  g.stroke();
+  g.setLineDash([]);
+}
+
+function drawRing() {
+  if (world.bloom < 0.02 || world.focus === null) return;
+  const d = TRACKS[world.focus].dna;
+  const r = MAXR * 1.06;
+  const fraction = world.scrubbing
+    ? world.scrubFraction
+    : Math.min(1, audio.position / TRACK_LENGTH);
+
+  g.beginPath();
+  g.arc(CX, CY, r, 0, Math.PI * 2);
+  g.strokeStyle = `rgba(237,233,245,${(0.07 * world.bloom).toFixed(3)})`;
+  g.lineWidth = 1;
+  g.stroke();
+
+  const start = -Math.PI / 2;
+  g.beginPath();
+  g.arc(CX, CY, r, start, start + fraction * Math.PI * 2);
+  g.strokeStyle = tone(d, 0.4, 0.66, (0.42 + 0.5 * world.scrubGlow) * world.bloom);
+  g.lineWidth = 1.5 + 2.5 * world.scrubGlow;
+  g.lineCap = "round";
+  g.stroke();
+
+  const a = start + fraction * Math.PI * 2;
+  const hx = CX + Math.cos(a) * r;
+  const hy = CY + Math.sin(a) * r;
+  const hr = (3 + 5 * world.scrubGlow) * world.bloom;
+  g.beginPath();
+  g.arc(hx, hy, hr, 0, Math.PI * 2);
+  g.fillStyle = `rgba(255,253,255,${(0.9 * world.bloom).toFixed(3)})`;
+  g.fill();
+}
+
+/** Three enormous soft lights behind everything, tinted by what is playing. */
+function drawVeil() {
+  const d = world.focus !== null ? TRACKS[world.focus].dna : TRACKS[0].dna;
+  const t = world.drift;
+  const b = audio.bands;
+  const span = Math.max(W, H);
+
+  // The room only lights up for a track that is actually burning. Unsummoned,
+  // the lamps are barely there and the ground stays properly black.
+  const lit = 0.22 + 0.78 * world.bloom;
+
+  const lamps = [
+    [0.5 + 0.34 * Math.sin(t * 0.041), 0.34 + 0.20 * Math.cos(t * 0.033), span * 0.72, 0.0, 0.14 + 0.16 * b[1]],
+    [0.5 + 0.40 * Math.cos(t * 0.027 + 1.2), 0.70 + 0.18 * Math.sin(t * 0.036 + 0.4), span * 0.58, 0.6, 0.11 + 0.14 * b[0]],
+    [0.5 + 0.46 * Math.sin(t * 0.019 + 2.6), 0.5 + 0.40 * Math.cos(t * 0.023 + 2.1), span * 0.46, 1.3, 0.07 + 0.19 * b[2]],
+  ];
+
+  for (const [fx, fy, radius, hueT, alpha] of lamps) {
+    const x = fx * W, y = fy * H;
+    const grad = g.createRadialGradient(x, y, 0, x, y, radius);
+    grad.addColorStop(0, tone(d, hueT, 0.40, alpha * lit));
+    grad.addColorStop(1, tone(d, hueT, 0.36, 0));
+    g.fillStyle = grad;
+    g.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  }
+}
+
+/* ── Frame ────────────────────────────────────────────────────────────────── */
+
+function frame(now) {
+  stepWorld(now);
+
+  g.globalCompositeOperation = "source-over";
+  g.fillStyle = "#05060a";
+  g.fillRect(0, 0, W, H);
+
+  g.globalCompositeOperation = "lighter";
+  drawVeil();
+
+  const bands = audio.voice ? audio.bands : IDLE_BANDS;
+
+  for (let i = 0; i < TRACKS.length; i++) {
+    const p = placement(i);
+    if (p.presence < 0.02) continue;
+    drawHalo(TRACKS[i].dna, p.x, p.y, p.radius, p.isFocus ? bands : IDLE_BANDS, p.presence);
+  }
+
+  drawThread();
+
+  for (let i = 0; i < TRACKS.length; i++) {
+    const p = placement(i);
+    if (p.presence < 0.02) continue;
+    drawSigil(TRACKS[i].dna, p.x, p.y, p.radius,
+              world.drift + i * 3.7,
+              p.isFocus ? bands : IDLE_BANDS,
+              p.isFocus ? world.bloom : 0,
+              p.presence);
+  }
+
+  drawRing();
+  g.globalCompositeOperation = "source-over";
+
+  updateText();
+  requestAnimationFrame(frame);
+}
+
+/* ── Text ─────────────────────────────────────────────────────────────────── */
+
+const nameEl = document.getElementById("name");
+const inscriptionEl = document.getElementById("inscription");
+const hintEl = document.getElementById("hint");
+const legendEl = document.getElementById("legend");
+let lastInscription = "";
+
+function clock(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function updateText() {
+  const lit = world.focus !== null && world.bloom > 0.35;
+  nameEl.classList.toggle("lit", lit);
+  inscriptionEl.classList.toggle("lit", lit);
+  hintEl.classList.toggle("gone", world.focus !== null);
+
+  if (world.focus === null) return;
+  const track = TRACKS[world.focus];
+  if (nameEl.textContent !== track.title) nameEl.textContent = track.title;
+
+  const elapsed = world.scrubbing ? world.scrubFraction * TRACK_LENGTH : audio.position;
+  const d = track.dna;
+  const text = `${clock(elapsed)}  ·  ${d.bpm} BPM  ·  ${d.scale.toUpperCase()}  ·  ${d.petals} PETALS`;
+  if (text !== lastInscription) {
+    inscriptionEl.textContent = text;
+    lastInscription = text;
+  }
+}
+
+/* ── Input ────────────────────────────────────────────────────────────────── */
+
+let pointer = null;
+
+function fractionAt(x, y) {
+  let a = Math.atan2(y - CY, x - CX) + Math.PI / 2;
+  if (a < 0) a += Math.PI * 2;
+  return Math.min(1, Math.max(0, a / (Math.PI * 2)));
+}
+
+function pickGlyph(x, y) {
+  let best = null;
+  for (let i = 0; i < TRACKS.length; i++) {
+    const p = placement(i);
+    if (p.presence < 0.15) continue;
+    const dist = Math.hypot(x - p.x, y - p.y);
+    if (dist < Math.max(40, p.radius * 1.7) && (!best || dist < best.dist)) best = { i, dist };
+  }
+  return best;
+}
+
+const legendText = document.getElementById("legend-text");
+let legendTimer = null;
+
+/** The legend always names the gestures available *now*, then retires. */
+function setLegend(html, retireAfter) {
+  clearTimeout(legendTimer);
+  legendText.innerHTML = html;
+  legendEl.classList.remove("gone");
+  if (retireAfter) legendTimer = setTimeout(() => legendEl.classList.add("gone"), retireAfter);
+}
+
+const FIELD_LEGEND = "DRAG&nbsp;·&nbsp;TURN THE FIELD";
+const MANDALA_LEGEND =
+  "RING&nbsp;·&nbsp;SCRUB &nbsp;&nbsp; CORE&nbsp;·&nbsp;HOLD &nbsp;&nbsp; PULL DOWN&nbsp;·&nbsp;RELEASE";
+
+function summon(i) {
+  world.focus = i;
+  world.bloomTarget = 1;
+  setLegend(MANDALA_LEGEND, 8000);
+  audio.summon(TRACKS[i]);
+}
+
+function release() {
+  world.bloomTarget = 0;
+  world.focus = null;
+  audio.dismiss();
+  setLegend(FIELD_LEGEND, 9000);
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  const x = e.clientX, y = e.clientY;
+  const dist = Math.hypot(x - CX, y - CY);
+  let mode = "spin";
+  if (world.bloom > 0.5) {
+    if (dist > MAXR * 0.82) mode = "scrub";
+    else if (dist < MAXR * 0.26) mode = "core";
+  }
+  pointer = { x0: x, y0: y, x, y, mode, moved: 0, bloomAtStart: world.bloomTarget };
+  if (mode === "scrub") {
+    world.scrubbing = true;
+    world.scrubFraction = fractionAt(x, y);
+    audio.seekFraction(world.scrubFraction);
+  }
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!pointer) return;
+  const x = e.clientX, y = e.clientY;
+  const dx = x - pointer.x, dy = y - pointer.y;
+  pointer.moved += Math.abs(dx) + Math.abs(dy);
+
+  if (pointer.mode === "scrub") {
+    world.scrubFraction = fractionAt(x, y);
+    audio.seekFraction(world.scrubFraction);
+  } else if (pointer.mode === "core" && pointer.moved > 14) {
+    pointer.mode = "spin";
+  } else if (pointer.mode === "spin") {
+    const down = y - pointer.y0;
+    // Pulling down out of a bloomed mandala folds it back into the field.
+    if (world.bloom > 0.5 && down > 14 && Math.abs(down) > Math.abs(x - pointer.x0)) {
+      pointer.mode = "release";
+      world.bloomTarget = Math.max(0, 1 - down / 260);
+    } else {
+      world.rotation += dx / 900;
+      world.spinVelocity = dx / 900 / 0.016 * 0.12;
+    }
+  } else if (pointer.mode === "release") {
+    world.bloomTarget = Math.max(0, 1 - (y - pointer.y0) / 260);
+  }
+
+  pointer.x = x;
+  pointer.y = y;
+});
+
+function endPointer(e) {
+  if (!pointer) return;
+  if (pointer.mode === "scrub") {
+    world.scrubbing = false;
+  } else if (pointer.mode === "release") {
+    if (world.bloomTarget < 0.55) {
+      release();
+    } else {
+      world.bloomTarget = 1;
+    }
+  } else if (pointer.moved < 12) {
+    if (pointer.mode === "core") {
+      audio.toggle();
+    } else {
+      const hit = pickGlyph(pointer.x0, pointer.y0);
+      if (hit) summon(hit.i);
+    }
+  }
+  pointer = null;
+}
+
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === " ") { e.preventDefault(); audio.toggle(); }
+  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    const dir = e.key === "ArrowRight" ? 1 : -1;
+    if (world.focus !== null) {
+      audio.seekFraction(audio.position / TRACK_LENGTH + dir * (10 / TRACK_LENGTH));
+    } else {
+      world.spinVelocity = dir * 1.4;
+    }
+  }
+  if (e.key === "Escape" && world.focus !== null) release();
+});
+
+setLegend(FIELD_LEGEND, 9000);
+requestAnimationFrame(frame);
+</script>
