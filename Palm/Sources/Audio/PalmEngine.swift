@@ -1,4 +1,5 @@
 import AVFoundation
+import os
 import Combine
 import SwiftUI
 
@@ -203,12 +204,13 @@ final class PalmEngine: ObservableObject {
     func audition(track index: Int, note: UInt8, velocity: UInt8) {
         guard index < chains.count else { return }
         let chain = chains[index]
-        let at = clock.currentSample + 32
-        chain.schedule(MIDIEvent(sample: at, note: note, velocity: velocity, isOn: true))
-        let clock = self.clock
+        let renderClock = clock
+        chain.schedule(MIDIEvent(sample: renderClock.currentSample + 32,
+                                 note: note, velocity: velocity, isOn: true))
         Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
-            chain.schedule(MIDIEvent(sample: clock.currentSample, note: note, velocity: 0, isOn: false))
+            chain.schedule(MIDIEvent(sample: renderClock.currentSample,
+                                     note: note, velocity: 0, isOn: false))
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// A snapshot of everything the sequencer needs, in a form it can read from its
 /// own thread without touching the main actor. The UI writes it whenever the

@@ -317,10 +317,24 @@ private struct PluginBrowser: View {
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
-                .searchable(text: $query, prompt: "Search plugins")
+                .modifier(SearchBar(query: $query))
             }
         }
         .background(P.surface)
+    }
+}
+
+/// `searchable` needs a navigation container to render into; wrapping only the
+/// list keeps the sheet's own header as the title.
+private struct SearchBar: ViewModifier {
+    @Binding var query: String
+    func body(content: Content) -> some View {
+        NavigationStack {
+            content
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(.hidden, for: .navigationBar)
+                .searchable(text: $query, prompt: "Search plugins")
+        }
     }
 }
 

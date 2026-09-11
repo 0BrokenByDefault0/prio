@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct MIDIEvent {
     var sample: Double      // absolute render-clock sample time

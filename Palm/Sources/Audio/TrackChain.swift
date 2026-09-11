@@ -1,4 +1,5 @@
 import AVFoundation
+import os
 
 /// One track's signal path: a source (built-in synth or an AUv3 instrument),
 /// an ordered list of AUv3 effects, and a mixer that owns volume and pan.
