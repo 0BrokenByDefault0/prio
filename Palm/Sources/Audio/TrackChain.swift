@@ -110,7 +110,7 @@ final class TrackChain: @unchecked Sendable {
     private func sendToAU(_ unit: AVAudioUnit, event: MIDIEvent) {
         guard let block = unit.auAudioUnit.scheduleMIDIEventBlock else { return }
         let status: UInt8 = (event.isOn ? 0x90 : 0x80)
-        var bytes: [UInt8] = [status, event.note, event.isOn ? event.velocity : 0]
+        let bytes: [UInt8] = [status, event.note, event.isOn ? event.velocity : 0]
         // Offset the event into the AU's current render cycle when we can, so
         // plugin timing matches the built-in voices instead of drifting by a buffer.
         let offset = event.sample - clock.currentSample
@@ -125,7 +125,7 @@ final class TrackChain: @unchecked Sendable {
         instrument.allNotesOff()
         if let block = auInstrument?.auAudioUnit.scheduleMIDIEventBlock {
             for channel in 0..<16 {
-                var bytes: [UInt8] = [0xB0 | UInt8(channel), 123, 0]   // All Notes Off
+                let bytes: [UInt8] = [0xB0 | UInt8(channel), 123, 0]   // All Notes Off
                 bytes.withUnsafeBufferPointer { ptr in
                     block(AUEventSampleTimeImmediate, 0, 3, ptr.baseAddress!)
                 }

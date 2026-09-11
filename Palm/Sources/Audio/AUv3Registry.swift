@@ -8,8 +8,12 @@ struct AUv3Plugin: Identifiable, Hashable {
     let name: String
     let manufacturer: String
     let description: AudioComponentDescription
-    let hasCustomView: Bool
     let isInstrument: Bool
+
+    // AudioComponentDescription is a plain C struct with no conformances, so
+    // identity comes from `id`, which already encodes type/subtype/manufacturer.
+    static func == (a: AUv3Plugin, b: AUv3Plugin) -> Bool { a.id == b.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 
     var ref: PluginRef {
         PluginRef(manufacturer: description.componentManufacturer,
@@ -61,7 +65,6 @@ final class AUv3Registry: ObservableObject {
                         name: component.name,
                         manufacturer: component.manufacturerName,
                         description: d,
-                        hasCustomView: component.hasCustomView,
                         isInstrument: instrument))
                 }
             }
