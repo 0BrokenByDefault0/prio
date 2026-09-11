@@ -1,0 +1,41 @@
+name: Palm unsigned IPA
+
+# Builds the app on a macOS runner and uploads Palm-unsigned.ipa as a workflow
+# artifact, so the IPA can be produced without owning a Mac.
+on:
+  push:
+    branches:
+      - "claude/**"
+    paths:
+      - "Palm/**"
+      - "scripts/build_palm_ipa.sh"
+      - ".github/workflows/palm-ipa.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+
+      - name: Show toolchain
+        run: xcodebuild -version && swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Build unsigned IPA
+        run: ./scripts/build_palm_ipa.sh
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Palm-unsigned-ipa
+          path: build/Palm-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
